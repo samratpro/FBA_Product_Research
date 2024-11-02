@@ -3,7 +3,7 @@ from playwright.sync_api import sync_playwright
 import os
 import csv
 import json
-
+import re
 
 
 
@@ -64,16 +64,42 @@ def cookie_save():
 if not is_storage_state_valid(storage_state_file):
     cookie_save()
 
+
+def find_price(text):
+    # Regex to match 2-3 digit numbers with optional decimal part
+    pattern = r"\b\d{2,3}(?:\.\d{1,2})?\b"
+    match = re.search(pattern, text)
+    if match:
+        return float(match.group())
+    else:
+        return 0.0
+
+def find_amazon(text):
+    pattern = r"a\s*m\s*a\s*z\s*o\s*n"
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    if matches:
+        return True
+    else:
+        return False
+
 with open("input.txt") as file:
     categories = file.readlines()
     categories = [x.strip() for x in categories]
     for category in categories:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                executable_path=str(chrome_path),
-                headless=False,
-                args=args,
-            )
+            print("Input 1 and Enter for Browser Open")
+            print("Input 0 and Enter for Headless Mode")
+            headless = int(input('Option:'))
+            if headless == 1:
+                browser = playwright.chromium.launch(
+                    executable_path=str(chrome_path),
+                    headless=False,
+                    args=args,
+                )
+            else:
+                browser = playwright.chromium.launch(
+                    executable_path=str(chrome_path),args=args,
+                )
             context = browser.new_context(storage_state=storage_state_file, no_viewport=True)
             page = context.new_page()
 
@@ -101,27 +127,26 @@ with open("input.txt") as file:
                         # when no product url found in search page then break
 
                     if delivery.count() > 0:
-                        if "by amazon" not in delivery.inner_text().lower() and prime.count() == 0:
+                        if not find_amazon(delivery.inner_text()) and prime.count() == 0:
                             url = product_url.get_attribute("href")
                             link_list.append("https://www.amazon.com" + url)
                     p_i += 1
                 i += 1
+
+
 
             all_data = []
             i = 0
             for product_link in link_list:
                 try:
                     page.goto(product_link)
-                    shipping_card = page.locator("//div[@id='offerDisplayFeatures_desktop']")
+                    shipping_card = page.locator("(//div[@id='offer-display-features'])[1]")
                     if shipping_card.count() > 0:
-                        price = '0'
-                        high_price = '0'
-                        low_price = '0'
                         skip = False
-                        if "amazon" not in shipping_card.inner_text().lower():
-                            print(f'Found No. {str(i)}. {product_link}')
+                        if not find_amazon(shipping_card.inner_text()):
+                            print(f'Found No. {str(i)}. {product_link.split('ref')[0]}')
                             product_price = page.locator("(//div[@id='corePriceDisplay_desktop_feature_div']//span[@class='a-price-whole'])[1]")
-                            price = product_price.inner_text() if product_price.count() > 0 else ''
+                            price = find_price(product_price.inner_text()) if product_price.count() > 0 else 0
                             more_element = page.locator("//div[@id='dynamic-aod-ingress-box']//a[@class='a-link-normal']")
                             if more_element.count() > 0:
                                 more_element.click()
@@ -134,35 +159,35 @@ with open("input.txt") as file:
                                         break
                                     ship_ele = page.locator(f"(//div[@id='aod-offer']//div[@id='aod-offer-shipsFrom'])[{str(price_i)}]")
                                     if ship_ele.count() > 0:
-                                        if "amazon" in ship_ele.inner_text().lower():
+                                        if find_amazon(ship_ele.inner_text()):
                                             skip = True
-                                            price_list.append('0')
+                                            price_list.append(0)
                                             break
                                         else:
-                                            print("temp_price.inner_text() : ", temp_price.inner_text())
-                                            price_list.append(temp_price.inner_text())
+                                            # print("temp_price.inner_text() : ", temp_price.inner_text())
+                                            price_list.append(find_price(temp_price.inner_text()))
                                     price_i += 1
                                 price_list.sort()
                                 low_price = price_list[0]
                                 high_price = price_list[-1]
 
-                        if skip == False:
-                            dicts = {
-                                'url': product_link,
-                                'price': price,
-                                'low_price': low_price,
-                                'high_price': high_price
-                             }
-                            all_data.append(dicts)
-                            header = ['url','price','low_price','high_price']
-                            if not os.path.exists(category):
-                                os.mkdir(category)
-                            with open(f'{category}/data.csv', 'w', newline='', encoding='utf-8') as file:
-                                writer = csv.DictWriter(file, fieldnames=header)
-                                writer.writeheader()
-                                writer.writerows(all_data)
-                        else:
-                            print(f'Not FBM No. {str(i)}. {product_link}')
+                            if not skip:
+                                dicts = {
+                                    'url': product_link,
+                                    'price': price,
+                                    'low_price': low_price,
+                                    'high_price': high_price
+                                 }
+                                all_data.append(dicts)
+                                header = ['url','price','low_price','high_price']
+                                if not os.path.exists('data'):
+                                    os.mkdir('data')
+                                with open(f'data/{category}.csv', 'w', newline='', encoding='utf-8') as file:
+                                    writer = csv.DictWriter(file, fieldnames=header)
+                                    writer.writeheader()
+                                    writer.writerows(all_data)
+                            else:
+                                print(f'No. {str(i)}. product is not FBM so skipped.. \n')
                 except Exception as ops:
                     print(f'Found No. {str(i)} : {ops}')
                     pass
