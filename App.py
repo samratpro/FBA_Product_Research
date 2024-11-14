@@ -6,8 +6,6 @@ import json
 import re
 
 
-
-
 args=[
      '--disable-blink-features=AutomationControlled',
      '--start-maximized',
@@ -82,27 +80,25 @@ def find_amazon(text):
     else:
         return False
 
+def insert_at_position(d, key, value, position):
+    items = list(d.items())
+    items.insert(position, (key, value))
+    return dict(items)
+
 with open("input.txt") as file:
     categories = file.readlines()
     categories = [x.strip() for x in categories]
     for category in categories:
         with sync_playwright() as playwright:
-            print("Input 1 and Enter for Browser Open")
-            print("Input 0 and Enter for Headless Mode")
-            headless = int(input('Option:'))
-            if headless == 1:
-                browser = playwright.chromium.launch(
+            browser = playwright.chromium.launch(
                     executable_path=str(chrome_path),
                     headless=False,
                     args=args,
                 )
-            else:
-                browser = playwright.chromium.launch(
-                    executable_path=str(chrome_path),args=args,
-                )
             context = browser.new_context(storage_state=storage_state_file, no_viewport=True)
             page = context.new_page()
 
+            print(f'>> Scrapping category:- "{category}", search result pages..')
             link_list = []
             i = 1
             while True:
@@ -117,19 +113,17 @@ with open("input.txt") as file:
 
                 p_i = 1
                 while True:
-                    # Check if the delivery information exists and contains "by amazon"
-                    prime = page.locator(f"(//i[@aria-label='Amazon Prime'])[{str(p_i)}]")
-                    # if prime i button found means it is amazon's product
-                    product_url = page.locator(f"(//div[@data-cy='title-recipe'])[{str(p_i)}]//h2//a")
+                    product_url = page.locator(f"(//a[@class='a-link-normal s-underline-text s-underline-link-text s-link-style a-text-normal'])[{str(p_i)}]")
                     delivery = page.locator(f"(//div[@data-cy='delivery-recipe'])[{str(p_i)}]")
+                    prime = page.locator(f"(//div[@data-component-type='s-search-result'])[{str(p_i)}]//i[@aria-label='Amazon Prime']")
                     if not product_url.count() > 0:
                         break
                         # when no product url found in search page then break
-
                     if delivery.count() > 0:
                         if not find_amazon(delivery.inner_text()) and prime.count() == 0:
                             url = product_url.get_attribute("href")
                             link_list.append("https://www.amazon.com" + url)
+
                     p_i += 1
                 i += 1
 
@@ -137,21 +131,22 @@ with open("input.txt") as file:
 
             all_data = []
             i = 0
+            print(f"For Ctegory : {category} initially founded : {str(len(link_list))} products..\n")
             for product_link in link_list:
+                print(f'Found No. {str(i)}. {product_link.split('ref')[0]}')
                 try:
                     page.goto(product_link)
-                    shipping_card = page.locator("(//div[@id='offer-display-features'])[1]")
+                    shipping_card = page.locator("(//div[@id='buybox'])[1]")
                     if shipping_card.count() > 0:
                         skip = False
                         if not find_amazon(shipping_card.inner_text()):
-                            print(f'Found No. {str(i)}. {product_link.split('ref')[0]}')
                             product_price = page.locator("(//div[@id='corePriceDisplay_desktop_feature_div']//span[@class='a-price-whole'])[1]")
                             price = find_price(product_price.inner_text()) if product_price.count() > 0 else 0
                             more_element = page.locator("//div[@id='dynamic-aod-ingress-box']//a[@class='a-link-normal']")
+                            price_list = [0]
                             if more_element.count() > 0:
                                 more_element.click()
                                 sleep(3)
-                                price_list = []
                                 price_i = 1
                                 while True:
                                     temp_price = page.locator(f"(//div[@id='aod-offer']//span[@class='a-price-whole'])[{str(price_i)}]")
@@ -161,25 +156,51 @@ with open("input.txt") as file:
                                     if ship_ele.count() > 0:
                                         if find_amazon(ship_ele.inner_text()):
                                             skip = True
-                                            price_list.append(0)
                                             break
                                         else:
-                                            # print("temp_price.inner_text() : ", temp_price.inner_text())
                                             price_list.append(find_price(temp_price.inner_text()))
                                     price_i += 1
                                 price_list.sort()
-                                low_price = price_list[0]
-                                high_price = price_list[-1]
+                                print('price_list : ', price_list)
 
                             if not skip:
+                                low_price = price_list[0]
+                                high_price = price_list[-1]
                                 dicts = {
                                     'url': product_link,
                                     'price': price,
                                     'low_price': low_price,
                                     'high_price': high_price
                                  }
+                                fields_mapping = {
+                                    "Product Dimensions": 0,
+                                    "Item model number": 1,
+                                    "Department": 2,
+                                    "Date First Available": 3,
+                                    "Manufacturer": 4,
+                                    "ASIN": 5,
+                                    "Rank": 6,
+                                    "Reviews": 7
+                                }
+                                product_des = page.locator("//div[@id='detailBulletsWrapper_feature_div']//ul//span[@class='a-list-item']")
+                                if product_des.count() > 0:
+                                    for pd in product_des.element_handles():
+                                        line = pd.inner_text()
+                                        for key, index in fields_mapping.items():
+                                            if key in line:
+                                                _, value = line.split(":", 1)
+                                                dicts = insert_at_position(dicts, key, value.replace('\u200e', ''),index)
+                                                break
                                 all_data.append(dicts)
-                                header = ['url','price','low_price','high_price']
+                                header = ['url','price','low_price','high_price',
+                                          "Product Dimensions",
+                                          "Item model number",
+                                          "Department",
+                                          "Date First Available",
+                                          "Manufacturer",
+                                          "ASIN",
+                                          "Rank",
+                                          "Reviews"]
                                 if not os.path.exists('data'):
                                     os.mkdir('data')
                                 with open(f'data/{category}.csv', 'w', newline='', encoding='utf-8') as file:
@@ -187,7 +208,11 @@ with open("input.txt") as file:
                                     writer.writeheader()
                                     writer.writerows(all_data)
                             else:
-                                print(f'No. {str(i)}. product is not FBM so skipped.. \n')
+                                print(f'No. {str(i)}. product is not FBM so skipped after check other sellers.. \n')
+                        else:
+                            print(f'No. {str(i)}. product is not FBM so skipped after visit product page.. \n')
+                    else:
+                        print(f'No. {str(i)}. buybox HTML Section did not detected..  \n')
                 except Exception as ops:
                     print(f'Found No. {str(i)} : {ops}')
                     pass
